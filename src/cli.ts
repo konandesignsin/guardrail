@@ -1,9 +1,11 @@
 import { scanFiles } from './core/scanner.js';
 import { terminalReport, markdownReport } from './core/reporter.js';
 import type { Check, Finding } from './core/types.js';
-import { dummyCheck } from './checks/dummy-check.js';
+import { secretsCheck } from './checks/secrets.js';
+import { supabaseCheck } from './checks/supabase.js';
+import { qualityCheck } from './checks/quality.js';
 
-const CHECKS: Check[] = [dummyCheck];
+const CHECKS: Check[] = [secretsCheck, supabaseCheck, qualityCheck];
 
 async function main() {
   const target = process.argv[2];

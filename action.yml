@@ -1,0 +1,39 @@
+name: 'Guardrail Audit'
+description: 'Audit React/Vite apps for security and quality issues'
+author: 'konandesigns'
+
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  path:
+    description: 'Path to the project to audit'
+    required: false
+    default: '.'
+  fail-on:
+    description: 'Fail the workflow on findings of this severity or higher (high|medium|none)'
+    required: false
+    default: 'high'
+  comment:
+    description: 'Post or update a PR comment with the report (true|false)'
+    required: false
+    default: 'true'
+  github-token:
+    description: 'GitHub token for PR comments'
+    required: false
+    default: ${{ github.token }}
+  ignore:
+    description: 'Comma-separated glob patterns to ignore (e.g., "test-fixtures/**,node_modules/**")'
+    required: false
+    default: 'test-fixtures/**,node_modules/**'
+
+outputs:
+  total-findings:
+    description: 'Total number of findings'
+  high-count:
+    description: 'Number of high severity findings'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

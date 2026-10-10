@@ -1,0 +1,27 @@
+name: Guardrail Audit
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main, develop]
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run guardrail audit
+        uses: ./
+        with:
+          path: '.'
+          fail-on: 'high'
+          comment: 'true'
+          ignore: 'test-fixtures/**,dist/**'
+          github-token: ${{ secrets.GITHUB_TOKEN }}

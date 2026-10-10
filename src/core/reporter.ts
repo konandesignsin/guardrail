@@ -11,7 +11,7 @@ const DIM = '\x1b[2m';
 
 export function terminalReport(findings: Finding[], fileCount: number): string {
   if (findings.length === 0) {
-    return `\n${BOLD}vibe-audit${RESET} — scanned ${fileCount} files, no issues found.\n`;
+    return `\n${BOLD}guardrail${RESET} — scanned ${fileCount} files, no issues found.\n`;
   }
 
   const sorted = [...findings].sort((a, b) => {
@@ -20,7 +20,7 @@ export function terminalReport(findings: Finding[], fileCount: number): string {
   });
 
   const lines: string[] = [
-    `\n${BOLD}vibe-audit${RESET} — ${findings.length} finding${findings.length === 1 ? '' : 's'} across ${fileCount} files\n`,
+    `\n${BOLD}guardrail${RESET} — ${findings.length} finding${findings.length === 1 ? '' : 's'} across ${fileCount} files\n`,
   ];
 
   for (const f of sorted) {
@@ -39,11 +39,11 @@ export function terminalReport(findings: Finding[], fileCount: number): string {
 
 export function markdownReport(findings: Finding[], fileCount: number): string {
   if (findings.length === 0) {
-    return `## vibe-audit\n\nScanned ${fileCount} files — no issues found.`;
+    return `## guardrail\n\nScanned ${fileCount} files — no issues found.`;
   }
 
   const lines: string[] = [
-    `## vibe-audit`,
+    `## guardrail`,
     ``,
     `Found **${findings.length}** issue${findings.length === 1 ? '' : 's'} across ${fileCount} files.`,
     ``,
