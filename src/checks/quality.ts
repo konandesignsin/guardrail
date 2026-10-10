@@ -162,26 +162,71 @@ export const qualityCheck: Check = {
       }
     }
 
+    const KNOWN_ENTRY_FILES = new Set([
+      'main.tsx', 'main.ts', 'index.tsx', 'index.ts', 'App.tsx', 'App.ts',
+      'router.tsx', 'server.ts', 'start.ts', 'middleware.ts',
+      'instrumentation.ts', 'routeTree.gen.ts',
+    ]);
+
+    const KNOWN_CONFIG_PATTERNS = [
+      /^vite\.config\./, /^tailwind\.config\./, /^postcss\.config\./,
+      /^next\.config\./, /^eslint\.config\./, /^tsconfig.*\.json$/,
+      /\.d\.ts$/,
+    ];
+
+    const ROUTING_DIRS = ['src/routes/', 'src/pages/', 'src/app/', 'supabase/functions/'];
+
+    const FRAMEWORK_ENTRIES: Record<string, string[]> = {
+      '@tanstack/react-router': ['routeTree.gen.ts', 'src/router.tsx', 'src/main.tsx'],
+      next: ['next.config.js', 'next.config.mjs', 'src/middleware.ts', 'middleware.ts', 'src/app/layout.tsx'],
+      remix: ['app/root.tsx', 'app/entry.client.tsx', 'app/entry.server.tsx'],
+      astro: ['astro.config.mjs', 'astro.config.ts', 'src/pages/index.astro'],
+    };
+
+    const frameworkExtra: string[] = [];
+    const allDepNames = new Set([...Object.keys(deps), ...Object.keys(devDeps)]);
+    for (const [framework, entries] of Object.entries(FRAMEWORK_ENTRIES)) {
+      if (allDepNames.has(framework) || (framework === 'next' && allDepNames.has('next'))) {
+        frameworkExtra.push(...entries);
+      }
+    }
+    const frameworkEntrySet = new Set(frameworkExtra);
+
+    const orphans: string[] = [];
+
     for (const file of sourceFiles) {
-      if (file === 'main.tsx' || file === 'index.tsx' || file === 'App.tsx') continue;
-      const fileBase = basename(file).replace(/\.\w+$/, '');
+      const fileName = basename(file);
+      if (KNOWN_ENTRY_FILES.has(fileName)) continue;
+      if (KNOWN_CONFIG_PATTERNS.some((p) => p.test(file))) continue;
+      if (ROUTING_DIRS.some((dir) => file.startsWith(dir) || file.includes('/' + dir))) continue;
+      if (frameworkEntrySet.has(file) || frameworkEntrySet.has(fileName)) continue;
+
+      const fileBase = file.replace(/\.\w+$/, '');
       const isImported = Array.from(importedFiles).some(
-        (imp) => imp.includes(fileBase) || imp.includes(file.replace(/\.\w+$/, '')),
+        (imp) => imp.includes(fileBase) || imp.includes(fileName.replace(/\.\w+$/, '')),
       );
 
       if (!isImported && sourceFiles.length > 1) {
-        findings.push({
-          id: `${CHECK_ID}-007`,
-          severity: 'low',
-          category: 'quality',
-          file,
-          line: 1,
-          message: 'File is never imported by any other file',
-          whyItMatters:
-            'Orphan files are dead code. They add to bundle size (if imported elsewhere) or confusion about what the project actually does.',
-          fix: 'If the file is truly unused, delete it. If it should be used, import it where needed.',
-        });
+        orphans.push(file);
       }
+    }
+
+    if (orphans.length > 0) {
+      const fileList = orphans.length <= 5
+        ? orphans.map((f) => `\`${f}\``).join(', ')
+        : `${orphans.length} files`;
+
+      findings.push({
+        id: `${CHECK_ID}-007`,
+        severity: 'low',
+        category: 'quality',
+        file: orphans[0],
+        line: 1,
+        message: `${orphans.length} orphan file${orphans.length === 1 ? '' : 's'} never imported: ${fileList}`,
+        whyItMatters:
+          'Orphan files are dead code. They add confusion about what the project actually does and may indicate unfinished or abandoned features.',
+        fix: 'If these files are truly unused, delete them. If they should be used, import them where needed.',
+      });
     }
 
     return findings;
