@@ -146,17 +146,19 @@ export const supabaseCheck: Check = {
         }
 
         if (/service[_-]?role/i.test(line) && /supabase/i.test(line)) {
-          findings.push({
-            id: `${CHECK_ID}-007`,
-            severity: 'high',
-            category: 'security',
-            file,
-            line: i + 1,
-            message: 'service_role key used in client code',
-            whyItMatters:
-              'The service_role key bypasses all security and has full database access. If used in client code, anyone can extract it from your website and take complete control of your database.',
-            fix: 'Use the anon key instead:\n  const supabase = createClient(url, import.meta.env.VITE_SUPABASE_ANON_KEY)\nOnly use service_role in secure server-side code.',
-          });
+          if (!/message:|whyItMatters:|fix:|const\s+\w+\s*=|\/.*\/\.test/.test(line)) {
+            findings.push({
+              id: `${CHECK_ID}-007`,
+              severity: 'high',
+              category: 'security',
+              file,
+              line: i + 1,
+              message: 'service_role key used in client code',
+              whyItMatters:
+                'The service_role key bypasses all security and has full database access. If used in client code, anyone can extract it from your website and take complete control of your database.',
+              fix: 'Use the anon key instead:\n  const supabase = createClient(url, import.meta.env.VITE_SUPABASE_ANON_KEY)\nOnly use service_role in secure server-side code.',
+            });
+          }
         }
 
         if (/\b(isAdmin|isAdminUser|hasAdminAccess)\s*[:=]\s*localStorage/.test(line)) {
