@@ -31893,16 +31893,40 @@ const secretsCheck = {
                         });
                     }
                 }
-                if (/\b(VITE_|NEXT_PUBLIC_)[A-Z_]+\s*[:=]\s*['"][^'"]{8,}['"]/.test(line)) {
-                    const match = line.match(/\b(VITE_|NEXT_PUBLIC_)[A-Z_]+\s*[:=]\s*['"]([^'"]{8,})['"]/);
-                    if (match) {
+                const publicEnvMatch = line.match(/\b((?:VITE_|NEXT_PUBLIC_)[A-Z_]+)\s*[:=]\s*['"]([^'"]{8,})['"]/);
+                if (publicEnvMatch) {
+                    const varName = publicEnvMatch[1];
+                    const varValue = publicEnvMatch[2];
+                    if (/^https?:\/\//.test(varValue))
+                        continue;
+                    if (/^[a-z]+\.(supabase\.co|supabase\.in|supabase\.com)/i.test(varValue))
+                        continue;
+                    const jwtMatch = varValue.match(/^eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*$/);
+                    if (jwtMatch) {
+                        const decoded = tryDecodeJwt(jwtMatch[0]);
+                        if (decoded && decoded.includes('service_role')) {
+                            findings.push({
+                                id: `${CHECK_ID}-005`,
+                                severity: 'high',
+                                category: 'security',
+                                file,
+                                line: i + 1,
+                                message: `service_role key in public env variable: ${varName}`,
+                                whyItMatters: 'The service_role key bypasses Row Level Security and has full database access. VITE_ and NEXT_PUBLIC_ variables are embedded in your client-side JavaScript bundle — anyone can extract this key.',
+                                fix: `Use the anon key in ${varName}. Only use service_role in secure server-side environments.`,
+                            });
+                        }
+                        continue;
+                    }
+                    const suspiciousPatterns = /service[_-]?role|sk-|sk_live_|AKIA|ghp_|private.?key|secret|password/i;
+                    if (suspiciousPatterns.test(varName) || suspiciousPatterns.test(varValue)) {
                         findings.push({
                             id: `${CHECK_ID}-005`,
                             severity: 'high',
                             category: 'security',
                             file,
                             line: i + 1,
-                            message: `Secret in public env variable: ${match[1]}${match[2].split('_')[0]}...`,
+                            message: `Secret in public env variable: ${varName} = ${maskSecret(varValue)}`,
                             whyItMatters: 'VITE_ and NEXT_PUBLIC_ variables are embedded in your client-side JavaScript bundle. Anyone can view them by inspecting your website, even if they\'re "hidden" in config files.',
                             fix: 'Never put secrets in VITE_ or NEXT_PUBLIC_ variables. Use server-side environment variables or a backend API to handle sensitive operations.',
                         });
@@ -31964,16 +31988,33 @@ const supabaseCheck = {
                         status.policyCount++;
                 }
                 if (/USING\s*\(\s*true\s*\)/i.test(line)) {
-                    findings.push({
-                        id: `${supabase_CHECK_ID}-001`,
-                        severity: 'high',
-                        category: 'security',
-                        file,
-                        line: i + 1,
-                        message: 'Policy with USING (true) allows all reads',
-                        whyItMatters: 'USING (true) means any authenticated user can read all rows in this table. This is like having no security on your data at all.',
-                        fix: 'Replace with a proper condition:\n  USING (auth.uid() = user_id)\nThis ensures users can only read their own data.',
-                    });
+                    const contextStart = Math.max(0, i - 5);
+                    const context = lines.slice(contextStart, i + 1).join('\n');
+                    const isSelect = /FOR\s+SELECT/i.test(context);
+                    if (isSelect) {
+                        findings.push({
+                            id: `${supabase_CHECK_ID}-001`,
+                            severity: 'medium',
+                            category: 'security',
+                            file,
+                            line: i + 1,
+                            message: 'Policy with USING (true) — fine if this table is meant to be public',
+                            whyItMatters: 'USING (true) on a SELECT policy means anyone can read all rows. This is acceptable for public data (e.g. a blog posts table), but risky if the table contains sensitive information.',
+                            fix: 'If this table should be private, replace with:\n  USING (auth.uid() = user_id)\nIf it\'s intentionally public, you can ignore this.',
+                        });
+                    }
+                    else {
+                        findings.push({
+                            id: `${supabase_CHECK_ID}-001`,
+                            severity: 'high',
+                            category: 'security',
+                            file,
+                            line: i + 1,
+                            message: 'Policy with USING (true) allows all reads',
+                            whyItMatters: 'USING (true) means any authenticated user can read all rows in this table. This is like having no security on your data at all.',
+                            fix: 'Replace with a proper condition:\n  USING (auth.uid() = user_id)\nThis ensures users can only read their own data.',
+                        });
+                    }
                 }
                 if (/WITH\s+CHECK\s*\(\s*true\s*\)/i.test(line)) {
                     findings.push({

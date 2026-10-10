@@ -111,16 +111,42 @@ export const secretsCheck: Check = {
           }
         }
 
-        if (/\b(VITE_|NEXT_PUBLIC_)[A-Z_]+\s*[:=]\s*['"][^'"]{8,}['"]/.test(line)) {
-          const match = line.match(/\b(VITE_|NEXT_PUBLIC_)[A-Z_]+\s*[:=]\s*['"]([^'"]{8,})['"]/);
-          if (match) {
+        const publicEnvMatch = line.match(/\b((?:VITE_|NEXT_PUBLIC_)[A-Z_]+)\s*[:=]\s*['"]([^'"]{8,})['"]/);
+        if (publicEnvMatch) {
+          const varName = publicEnvMatch[1];
+          const varValue = publicEnvMatch[2];
+
+          if (/^https?:\/\//.test(varValue)) continue;
+          if (/^[a-z]+\.(supabase\.co|supabase\.in|supabase\.com)/i.test(varValue)) continue;
+
+          const jwtMatch = varValue.match(/^eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*$/);
+          if (jwtMatch) {
+            const decoded = tryDecodeJwt(jwtMatch[0]);
+            if (decoded && decoded.includes('service_role')) {
+              findings.push({
+                id: `${CHECK_ID}-005`,
+                severity: 'high',
+                category: 'security',
+                file,
+                line: i + 1,
+                message: `service_role key in public env variable: ${varName}`,
+                whyItMatters:
+                  'The service_role key bypasses Row Level Security and has full database access. VITE_ and NEXT_PUBLIC_ variables are embedded in your client-side JavaScript bundle — anyone can extract this key.',
+                fix: `Use the anon key in ${varName}. Only use service_role in secure server-side environments.`,
+              });
+            }
+            continue;
+          }
+
+          const suspiciousPatterns = /service[_-]?role|sk-|sk_live_|AKIA|ghp_|private.?key|secret|password/i;
+          if (suspiciousPatterns.test(varName) || suspiciousPatterns.test(varValue)) {
             findings.push({
               id: `${CHECK_ID}-005`,
               severity: 'high',
               category: 'security',
               file,
               line: i + 1,
-              message: `Secret in public env variable: ${match[1]}${match[2].split('_')[0]}...`,
+              message: `Secret in public env variable: ${varName} = ${maskSecret(varValue)}`,
               whyItMatters:
                 'VITE_ and NEXT_PUBLIC_ variables are embedded in your client-side JavaScript bundle. Anyone can view them by inspecting your website, even if they\'re "hidden" in config files.',
               fix: 'Never put secrets in VITE_ or NEXT_PUBLIC_ variables. Use server-side environment variables or a backend API to handle sensitive operations.',

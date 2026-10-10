@@ -45,17 +45,35 @@ export const supabaseCheck: Check = {
         }
 
         if (/USING\s*\(\s*true\s*\)/i.test(line)) {
-          findings.push({
-            id: `${CHECK_ID}-001`,
-            severity: 'high',
-            category: 'security',
-            file,
-            line: i + 1,
-            message: 'Policy with USING (true) allows all reads',
-            whyItMatters:
-              'USING (true) means any authenticated user can read all rows in this table. This is like having no security on your data at all.',
-            fix: 'Replace with a proper condition:\n  USING (auth.uid() = user_id)\nThis ensures users can only read their own data.',
-          });
+          const contextStart = Math.max(0, i - 5);
+          const context = lines.slice(contextStart, i + 1).join('\n');
+          const isSelect = /FOR\s+SELECT/i.test(context);
+
+          if (isSelect) {
+            findings.push({
+              id: `${CHECK_ID}-001`,
+              severity: 'medium',
+              category: 'security',
+              file,
+              line: i + 1,
+              message: 'Policy with USING (true) — fine if this table is meant to be public',
+              whyItMatters:
+                'USING (true) on a SELECT policy means anyone can read all rows. This is acceptable for public data (e.g. a blog posts table), but risky if the table contains sensitive information.',
+              fix: 'If this table should be private, replace with:\n  USING (auth.uid() = user_id)\nIf it\'s intentionally public, you can ignore this.',
+            });
+          } else {
+            findings.push({
+              id: `${CHECK_ID}-001`,
+              severity: 'high',
+              category: 'security',
+              file,
+              line: i + 1,
+              message: 'Policy with USING (true) allows all reads',
+              whyItMatters:
+                'USING (true) means any authenticated user can read all rows in this table. This is like having no security on your data at all.',
+              fix: 'Replace with a proper condition:\n  USING (auth.uid() = user_id)\nThis ensures users can only read their own data.',
+            });
+          }
         }
 
         if (/WITH\s+CHECK\s*\(\s*true\s*\)/i.test(line)) {
