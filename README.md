@@ -1,10 +1,19 @@
-# guardrail
+# Guardrail
 
-Audit React/Vite apps exported from Lovable or Bolt for security and quality issues.
+Security and quality auditor for AI-built apps (Lovable, Bolt, Cursor) as a GitHub Action.
 
-## GitHub Action (Recommended)
+![GitHub Actions status](https://img.shields.io/github/actions/workflow/status/konandesignsin/guardrail/guardrail.yml)
+![License](https://img.shields.io/github/license/konandesignsin/guardrail)
 
-Use the reusable action in your workflows:
+## Why
+
+AI-generated apps often ship with leaked API keys, missing Supabase Row Level Security, and dead code that never gets cleaned up. These issues slip through because developers trust the AI output without auditing it.
+
+Guardrail catches them on every pull request, before they reach production.
+
+## Quick start
+
+Add this workflow to your repository:
 
 ```yaml
 name: Security Audit
@@ -18,32 +27,75 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
-      - uses: konandesigns/guardrail@v1
+      - uses: konandesignsin/guardrail@v1
         with:
-          path: '.'                    # Path to audit (default: '.')
-          fail-on: 'high'              # Fail on high|medium|none (default: high)
-          comment: 'true'              # Post PR comment (default: true)
-          ignore: 'test/**,dist/**'    # Comma-separated globs to ignore
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fail-on: high
 ```
 
+Guardrail will audit your code on every PR and post a comment with findings.
+
+## Inputs and outputs
+
 **Inputs:**
-- `path` — Project path to audit (default: `.`)
-- `fail-on` — Fail workflow on `high`, `medium`, or `none` (default: `high`)
-- `comment` — Post/update PR comment with report (default: `true`)
-- `ignore` — Comma-separated glob patterns to skip (default: `test-fixtures/**,node_modules/**`)
-- `github-token` — Token for PR comments (default: `${{ github.token }}`)
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `path` | Path to the project to audit | `.` |
+| `fail-on` | Fail workflow on `high`, `medium`, or `none` | `high` |
+| `comment` | Post/update PR comment with report | `true` |
+| `github-token` | Token for PR comments | `${{ github.token }}` |
+| `ignore` | Comma-separated glob patterns to skip | `test-fixtures/**,node_modules/**` |
 
 **Outputs:**
-- `total-findings` — Total number of findings
-- `high-count` — Number of high severity findings
 
-**Features:**
-- Automatically posts/updates a single PR comment (no spam)
-- Writes report to GitHub Actions job summary
-- Fails workflow based on severity threshold
+| Output | Description |
+|--------|-------------|
+| `total-findings` | Total number of findings |
+| `high-count` | Number of high severity findings |
 
-## Local CLI
+## What it checks
+
+### Secrets
+
+| Check | Severity | Example |
+|-------|----------|---------|
+| Supabase service_role key in code | HIGH | JWT with `role=service_role` in client code |
+| Hardcoded OpenAI key | HIGH | `sk-FAKEFAKEFAKE...` in source |
+| Hardcoded Stripe key | HIGH | `sk_live_FAKEFAKE...` in source |
+| Hardcoded AWS key | HIGH | `AKIAFAKEFAKE...` in source |
+| Hardcoded Google API key | HIGH | `AIzaFAKEFAKE...` in source |
+| Hardcoded GitHub token | HIGH | `ghp_FAKEFAKE...` in source |
+| Generic API key pattern | HIGH | `api_key = 'secret...'` in code |
+| Secret in VITE_ variable | HIGH | `VITE_API_KEY='secret...'` in .env |
+| .env not in .gitignore | HIGH | .env file exists but not gitignored |
+| .env.example missing | LOW | .env exists but no .env.example for documentation |
+
+### Supabase
+
+| Check | Severity | Example |
+|-------|----------|---------|
+| Table without RLS | HIGH | `CREATE TABLE users` without `ENABLE ROW LEVEL SECURITY` |
+| Policy with USING (true) | HIGH | `USING (true)` allows all reads |
+| Policy with WITH CHECK (true) | HIGH | `WITH CHECK (true)` allows all writes |
+| RLS enabled but no policies | MEDIUM | Table has RLS but zero policies (no one can access) |
+| delete()/update() without filter | HIGH | `.delete()` without `.eq()` affects all rows |
+| service_role in client code | HIGH | `createClient(url, serviceRoleKey)` in browser code |
+| Admin check in localStorage | HIGH | `isAdmin = localStorage.getItem('admin')` |
+| Public storage bucket | MEDIUM | `INSERT INTO storage.buckets ... public = true` |
+
+### Quality
+
+| Check | Severity | Example |
+|-------|----------|---------|
+| Unused dependency | MEDIUM | `moment` in package.json but never imported |
+| Duplicate dependency | MEDIUM | `typescript` in both dependencies and devDependencies |
+| Heavy package | LOW | `moment` instead of `date-fns` (20x smaller) |
+| console.log in source | LOW | `console.log('debug')` left in production code |
+| TODO/FIXME comment | LOW | `// TODO: fix this` without ticket reference |
+| Orphan file | LOW | File never imported by any other file |
+| Large file (>500 lines) | LOW | File has 800 lines, hard to maintain |
+
+## Run locally
 
 ```bash
 npx tsx src/cli.ts <path-to-project>
@@ -51,6 +103,50 @@ npx tsx src/cli.ts <path-to-project>
 
 Outputs a colored terminal report and writes `audit-report.md`.
 
-## Adding checks
+## Example PR comment
 
-Create a new file in `src/checks/` that exports a `Check` object, then add it to the `CHECKS` array in `src/cli.ts` and `src/action.ts`.
+```markdown
+## guardrail
+
+Found **3** issues across 12 files.
+
+| Severity | Category | File | Issue |
+|----------|----------|------|-------|
+| 🔴 high | security | `.env:4` | OpenAI API key hardcoded: sk-F**** |
+| 🔴 high | security | `src/App.tsx:15` | service_role key used in client code |
+| 🟡 medium | quality | `package.json:1` | Dependency "moment" is never imported |
+
+<details>
+<summary>Details & fixes</summary>
+
+### secrets-004 — OpenAI API key hardcoded
+- **File:** .env:4
+- **Severity:** high | **Category:** security
+- **Why it matters:** Hardcoded secrets in source code get committed to git...
+- **Fix:** Move the secret to a .env file and load it with import.meta.env...
+
+</details>
+```
+
+## Roadmap
+
+- Support for more frameworks (Next.js, Nuxt, SvelteKit)
+- SARIF output for GitHub Security tab integration
+- Auto-fix suggestions with code snippets
+- Custom check plugins
+- Severity overrides via config file
+
+## Contributing
+
+Contributions welcome. To add a new check:
+
+1. Create a file in `src/checks/` that exports a `Check` object
+2. Add it to the `CHECKS` array in `src/cli.ts` and `src/action.ts`
+3. Write beginner-friendly `whyItMatters` and `fix` messages
+4. Add test cases to `test-fixtures/vulnerable-app/`
+5. Run `npm run build` to update `dist/index.js`
+6. Submit a pull request
+
+## License
+
+MIT
