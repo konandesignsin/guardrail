@@ -1,19 +1,15 @@
 import { scanFiles } from './core/scanner.js';
 import { terminalReport, markdownReport } from './core/reporter.js';
-import type { Check, Finding } from './core/types.js';
-import { secretsCheck } from './checks/secrets.js';
-import { supabaseCheck } from './checks/supabase.js';
-import { qualityCheck } from './checks/quality.js';
-
-const CHECKS: Check[] = [secretsCheck, supabaseCheck, qualityCheck];
+import { scan } from './scan.js';
 
 async function main() {
   const args = process.argv.slice(2);
   const writeReport = args.includes('--report');
+  const asJson = args.includes('--json');
   const target = args.find((a) => !a.startsWith('--'));
 
   if (!target) {
-    console.error('Usage: npx tsx src/cli.ts <path-to-project> [--report]');
+    console.error('Usage: npx tsx src/cli.ts <path-to-project> [--report] [--json]');
     process.exit(1);
   }
 
@@ -24,21 +20,33 @@ async function main() {
     process.exit(0);
   }
 
-  const allFindings: Finding[] = [];
-  for (const check of CHECKS) {
-    const results = await check.run(files, target);
-    allFindings.push(...results);
+  const { score, findings } = scan(files);
+
+  const high = findings.filter((f) => f.severity === 'high').length;
+  const medium = findings.filter((f) => f.severity === 'medium').length;
+  const low = findings.filter((f) => f.severity === 'low').length;
+
+  if (asJson) {
+    const json = JSON.stringify(
+      {
+        score,
+        fileCount: files.length,
+        summary: { high, medium, low },
+        findings,
+      },
+      null,
+      2,
+    );
+    console.log(json);
+    process.exit(0);
   }
 
-  const high = allFindings.filter((f) => f.severity === 'high').length;
-  const medium = allFindings.filter((f) => f.severity === 'medium').length;
-  const low = allFindings.filter((f) => f.severity === 'low').length;
-  console.log(`\n${high} high, ${medium} medium, ${low} low\n`);
+  console.log(`\n${high} high, ${medium} medium, ${low} low — score ${score}/100\n`);
 
-  console.log(terminalReport(allFindings, files.length));
+  console.log(terminalReport(findings, files.length, score));
 
   if (writeReport) {
-    const md = markdownReport(allFindings, files.length);
+    const md = markdownReport(findings, files.length, score);
     const { writeFile } = await import('fs/promises');
     await writeFile('audit-report.md', md, 'utf-8');
     console.log('Markdown report written to audit-report.md');

@@ -31702,12 +31702,46 @@ var external_path_ = __nccwpck_require__(6928);
 
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', '.next', 'build']);
-const SOURCE_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.vue', '.svelte']);
+const SKIP_FILES = new Set([
+    'package-lock.json',
+    'yarn.lock',
+    'pnpm-lock.yaml',
+    'bun.lockb',
+]);
+const SKIP_EXTS = new Set([
+    '.png',
+    '.jpg',
+    '.jpeg',
+    '.gif',
+    '.ico',
+    '.svg',
+    '.webp',
+    '.pdf',
+    '.zip',
+    '.tar',
+    '.gz',
+    '.woff',
+    '.woff2',
+    '.ttf',
+    '.eot',
+    '.mp3',
+    '.mp4',
+    '.wav',
+    '.avi',
+    '.mov',
+]);
+const SOURCE_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.vue', '.svelte', '.sql']);
 const EXTRA_FILES = new Set(['.env', '.env.example', '.env.local', '.gitignore', 'package.json']);
 async function scanFiles(rootDir) {
-    const results = [];
-    await walk(rootDir, rootDir, results);
-    return results.sort();
+    const paths = [];
+    await walk(rootDir, rootDir, paths);
+    paths.sort();
+    const files = [];
+    for (const path of paths) {
+        const content = await (0,promises_namespaceObject.readFile)((0,external_path_.join)(rootDir, path), 'utf-8');
+        files.push({ path, content });
+    }
+    return files;
 }
 async function walk(root, dir, out) {
     const entries = await (0,promises_namespaceObject.readdir)(dir, { withFileTypes: true });
@@ -31722,10 +31756,14 @@ async function walk(root, dir, out) {
             await walk(root, full, out);
         }
         else if (entry.isFile()) {
+            if (SKIP_FILES.has(name))
+                continue;
             const dot = name.lastIndexOf('.');
-            const ext = dot >= 0 ? name.slice(dot) : '';
-            if (SOURCE_EXTS.has(ext) || EXTRA_FILES.has(name) || ext === '.sql') {
-                out.push((0,external_path_.relative)(root, full));
+            const ext = dot >= 0 ? name.slice(dot).toLowerCase() : '';
+            if (SKIP_EXTS.has(ext))
+                continue;
+            if (SOURCE_EXTS.has(ext) || EXTRA_FILES.has(name)) {
+                out.push((0,external_path_.relative)(root, full).replace(/\\/g, '/'));
             }
         }
     }
@@ -31740,56 +31778,59 @@ const SEVERITY_COLORS = {
 const RESET = '\x1b[0m';
 const BOLD = '\x1b[1m';
 const DIM = '\x1b[2m';
-function terminalReport(findings, fileCount) {
+function bySeverity(a, b) {
+    const order = { high: 0, medium: 1, low: 2 };
+    return order[a.severity] - order[b.severity];
+}
+function terminalReport(findings, fileCount, score) {
     if (findings.length === 0) {
-        return `\n${BOLD}guardrail${RESET} — scanned ${fileCount} files, no issues found.\n`;
+        const scoreNote = score !== undefined ? ` (score ${score}/100)` : '';
+        return `\n${BOLD}guardrail${RESET} — scanned ${fileCount} files, no issues found${scoreNote}.\n`;
     }
-    const sorted = [...findings].sort((a, b) => {
-        const order = { high: 0, medium: 1, low: 2 };
-        return order[a.severity] - order[b.severity];
-    });
-    const lines = [
-        `\n${BOLD}guardrail${RESET} — ${findings.length} finding${findings.length === 1 ? '' : 's'} across ${fileCount} files\n`,
-    ];
+    const header = score !== undefined
+        ? `\n${BOLD}guardrail${RESET} — score ${BOLD}${score}/100${RESET} — ${findings.length} finding${findings.length === 1 ? '' : 's'} across ${fileCount} files\n`
+        : `\n${BOLD}guardrail${RESET} — ${findings.length} finding${findings.length === 1 ? '' : 's'} across ${fileCount} files\n`;
+    const sorted = [...findings].sort(bySeverity);
+    const lines = [header];
     for (const f of sorted) {
         const color = SEVERITY_COLORS[f.severity];
         const tag = `${color}${BOLD}[${f.severity.toUpperCase()}]${RESET}`;
-        const cat = `${DIM}(${f.category})${RESET}`;
-        lines.push(`${tag} ${cat} ${f.message}`);
+        const cat = `${DIM}(${f.check})${RESET}`;
+        lines.push(`${tag} ${cat} ${f.title}`);
         lines.push(`     ${DIM}${f.file}:${f.line}${RESET}`);
-        lines.push(`     ${f.whyItMatters}`);
+        lines.push(`     ${f.explanation}`);
         lines.push(`     ${BOLD}Fix:${RESET} ${f.fix}`);
         lines.push('');
     }
     return lines.join('\n');
 }
-function markdownReport(findings, fileCount) {
+function markdownReport(findings, fileCount, score) {
+    const title = score !== undefined
+        ? `## guardrail — score ${score}/100`
+        : `## guardrail`;
     if (findings.length === 0) {
-        return `## guardrail\n\nScanned ${fileCount} files — no issues found.`;
+        return `${title}\n\nScanned ${fileCount} files — no issues found.`;
     }
     const lines = [
-        `## guardrail`,
+        title,
         ``,
         `Found **${findings.length}** issue${findings.length === 1 ? '' : 's'} across ${fileCount} files.`,
         ``,
-        `| Severity | Category | File | Issue |`,
-        `|----------|----------|------|-------|`,
+        `| Severity | Check | File | Issue |`,
+        `|----------|-------|------|-------|`,
     ];
-    const sorted = [...findings].sort((a, b) => {
-        const order = { high: 0, medium: 1, low: 2 };
-        return order[a.severity] - order[b.severity];
-    });
+    const sorted = [...findings].sort(bySeverity);
     for (const f of sorted) {
         const icon = f.severity === 'high' ? '🔴' : f.severity === 'medium' ? '🟡' : '🔵';
         const loc = `${f.file}:${f.line}`;
-        lines.push(`| ${icon} ${f.severity} | ${f.category} | \`${loc}\` | ${f.message} |`);
+        lines.push(`| ${icon} ${f.severity} | ${f.check} | \`${loc}\` | ${f.title} |`);
     }
     lines.push('', '<details>', '<summary>Details & fixes</summary>', '');
     for (const f of sorted) {
-        lines.push(`### ${f.id} — ${f.message}`);
+        lines.push(`### ${f.title}`);
         lines.push(`- **File:** ${f.file}:${f.line}`);
-        lines.push(`- **Severity:** ${f.severity} | **Category:** ${f.category}`);
-        lines.push(`- **Why it matters:** ${f.whyItMatters}`);
+        lines.push(`- **Severity:** ${f.severity} | **Check:** ${f.check}`);
+        lines.push(`- **Why it matters:** ${f.explanation}`);
         lines.push(`- **Fix:** ${f.fix}`);
         lines.push('');
     }
@@ -31798,9 +31839,7 @@ function markdownReport(findings, fileCount) {
 }
 
 ;// CONCATENATED MODULE: ./src/checks/secrets.ts
-
-
-const CHECK_ID = 'secrets';
+const CHECK = 'secrets';
 const HARDCODED_PATTERNS = [
     { pattern: /\bsk-[A-Za-z0-9]{20,}/g, name: 'OpenAI API key' },
     { pattern: /\bsk_live_[A-Za-z0-9]{20,}/g, name: 'Stripe secret key' },
@@ -31819,509 +31858,482 @@ function extractMatch(line, pattern) {
     const match = line.match(pattern);
     return match ? match[0] : null;
 }
-const secretsCheck = {
-    id: CHECK_ID,
-    name: 'Secrets detector',
-    async run(files, rootDir) {
-        const findings = [];
-        const hasEnv = files.includes('.env');
-        const hasEnvExample = files.includes('.env.example');
-        let gitignoreContent = '';
-        if (files.includes('.gitignore')) {
-            gitignoreContent = await (0,promises_namespaceObject.readFile)((0,external_path_.join)(rootDir, '.gitignore'), 'utf-8');
-        }
-        if (hasEnv && !gitignoreContent.includes('.env')) {
-            findings.push({
-                id: `${CHECK_ID}-001`,
-                severity: 'high',
-                category: 'security',
-                file: '.env',
-                line: 1,
-                message: '.env file exists but is not in .gitignore',
-                whyItMatters: 'Your .env file contains secrets. If it gets committed to git, anyone with repo access can see your API keys and database passwords.',
-                fix: 'Add ".env" to your .gitignore file so it never gets committed.',
-            });
-        }
-        if (hasEnv && !hasEnvExample) {
-            findings.push({
-                id: `${CHECK_ID}-002`,
-                severity: 'low',
-                category: 'security',
-                file: '.env',
-                line: 1,
-                message: '.env exists but .env.example is missing',
-                whyItMatters: 'Other developers (or you on another machine) won\'t know what environment variables are needed. An example file documents the required config without exposing real values.',
-                fix: 'Create a .env.example file with placeholder values (e.g., API_KEY=your_key_here) and commit it to git.',
-            });
-        }
-        for (const file of files) {
-            if (file === '.gitignore')
-                continue;
-            const content = await (0,promises_namespaceObject.readFile)((0,external_path_.join)(rootDir, file), 'utf-8');
-            const lines = content.split('\n');
-            for (let i = 0; i < lines.length; i++) {
-                const line = lines[i];
-                if (SERVICE_ROLE_JWT.test(line)) {
-                    const match = extractMatch(line, SERVICE_ROLE_JWT);
-                    const decoded = match ? tryDecodeJwt(match) : '';
-                    if (decoded && decoded.includes('service_role')) {
-                        findings.push({
-                            id: `${CHECK_ID}-003`,
-                            severity: 'high',
-                            category: 'security',
-                            file,
-                            line: i + 1,
-                            message: `Supabase service_role key found: ${maskSecret(match || '')}`,
-                            whyItMatters: 'The service_role key bypasses Row Level Security and has full database access. If exposed in client code, anyone can read/write/delete all your data.',
-                            fix: 'Use the anon key in client code. Only use service_role in secure server-side environments (Node.js backend, Edge Functions with care).',
-                        });
-                    }
-                }
-                for (const { pattern, name } of HARDCODED_PATTERNS) {
-                    pattern.lastIndex = 0;
-                    if (pattern.test(line)) {
-                        const match = extractMatch(line, pattern);
-                        findings.push({
-                            id: `${CHECK_ID}-004`,
-                            severity: 'high',
-                            category: 'security',
-                            file,
-                            line: i + 1,
-                            message: `${name} hardcoded: ${maskSecret(match || '')}`,
-                            whyItMatters: 'Hardcoded secrets in source code get committed to git. Anyone with access (including leaked repos) can use your API keys, potentially costing you money or exposing data.',
-                            fix: 'Move the secret to a .env file and load it with import.meta.env.VITE_KEY_NAME (Vite) or process.env.KEY_NAME (Node).',
-                        });
-                    }
-                }
-                const publicEnvMatch = line.match(/\b((?:VITE_|NEXT_PUBLIC_)[A-Z_]+)\s*[:=]\s*['"]([^'"]{8,})['"]/);
-                if (publicEnvMatch) {
-                    const varName = publicEnvMatch[1];
-                    const varValue = publicEnvMatch[2];
-                    if (/^https?:\/\//.test(varValue))
-                        continue;
-                    if (/^[a-z]+\.(supabase\.co|supabase\.in|supabase\.com)/i.test(varValue))
-                        continue;
-                    const jwtMatch = varValue.match(/^eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*$/);
-                    if (jwtMatch) {
-                        const decoded = tryDecodeJwt(jwtMatch[0]);
-                        if (decoded && decoded.includes('service_role')) {
-                            findings.push({
-                                id: `${CHECK_ID}-005`,
-                                severity: 'high',
-                                category: 'security',
-                                file,
-                                line: i + 1,
-                                message: `service_role key in public env variable: ${varName}`,
-                                whyItMatters: 'The service_role key bypasses Row Level Security and has full database access. VITE_ and NEXT_PUBLIC_ variables are embedded in your client-side JavaScript bundle — anyone can extract this key.',
-                                fix: `Use the anon key in ${varName}. Only use service_role in secure server-side environments.`,
-                            });
-                        }
-                        continue;
-                    }
-                    const suspiciousPatterns = /service[_-]?role|sk-|sk_live_|AKIA|ghp_|private.?key|secret|password/i;
-                    if (suspiciousPatterns.test(varName) || suspiciousPatterns.test(varValue)) {
-                        findings.push({
-                            id: `${CHECK_ID}-005`,
-                            severity: 'high',
-                            category: 'security',
-                            file,
-                            line: i + 1,
-                            message: `Secret in public env variable: ${varName} = ${maskSecret(varValue)}`,
-                            whyItMatters: 'VITE_ and NEXT_PUBLIC_ variables are embedded in your client-side JavaScript bundle. Anyone can view them by inspecting your website, even if they\'re "hidden" in config files.',
-                            fix: 'Never put secrets in VITE_ or NEXT_PUBLIC_ variables. Use server-side environment variables or a backend API to handle sensitive operations.',
-                        });
-                    }
-                }
-            }
-        }
-        return findings;
-    },
-};
 function tryDecodeJwt(token) {
     try {
         const parts = token.split('.');
         if (parts.length !== 3)
             return '';
         const payload = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-        const decoded = Buffer.from(payload, 'base64').toString('utf-8');
-        return decoded;
+        return atob(payload);
     }
     catch {
         return '';
     }
 }
+function secretsCheck(files) {
+    const findings = [];
+    const envFile = files.find((f) => f.path === '.env');
+    const hasEnv = !!envFile;
+    const hasEnvExample = files.some((f) => f.path === '.env.example');
+    const gitignoreFile = files.find((f) => f.path === '.gitignore');
+    const gitignoreContent = gitignoreFile?.content || '';
+    if (hasEnv && !gitignoreContent.includes('.env')) {
+        findings.push({
+            severity: 'high',
+            check: CHECK,
+            file: '.env',
+            line: 1,
+            title: '.env file is not in .gitignore',
+            explanation: 'Your .env file has secrets in it, and it could get uploaded to GitHub where anyone can see it — even if your repo is private today, it might not be tomorrow.',
+            fix: 'Add ".env" to your .gitignore file so it never gets committed.',
+        });
+    }
+    if (hasEnv && !hasEnvExample) {
+        findings.push({
+            severity: 'low',
+            check: CHECK,
+            file: '.env',
+            line: 1,
+            title: '.env exists but .env.example is missing',
+            explanation: 'Other developers (or you on another machine) won\'t know what environment variables are needed. An example file documents the required config without exposing real values.',
+            fix: 'Create a .env.example file with placeholder values (e.g., API_KEY=your_key_here) and commit it to git.',
+        });
+    }
+    for (const file of files) {
+        if (file.path === '.gitignore')
+            continue;
+        const lines = file.content.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            if (SERVICE_ROLE_JWT.test(line)) {
+                const match = extractMatch(line, SERVICE_ROLE_JWT);
+                const decoded = match ? tryDecodeJwt(match) : '';
+                if (decoded && decoded.includes('service_role')) {
+                    findings.push({
+                        severity: 'high',
+                        check: CHECK,
+                        file: file.path,
+                        line: i + 1,
+                        title: `Supabase service_role key found: ${maskSecret(match || '')}`,
+                        explanation: 'The service_role key bypasses all database security. If it ends up in code that runs in a browser, anyone can extract it and read, modify, or delete all your data.',
+                        fix: 'Use the anon key in client code. Only use service_role in secure server-side environments (Node.js backend, Edge Functions with care).',
+                    });
+                }
+            }
+            for (const { pattern, name } of HARDCODED_PATTERNS) {
+                pattern.lastIndex = 0;
+                if (pattern.test(line)) {
+                    const match = extractMatch(line, pattern);
+                    findings.push({
+                        severity: 'high',
+                        check: CHECK,
+                        file: file.path,
+                        line: i + 1,
+                        title: `${name} hardcoded: ${maskSecret(match || '')}`,
+                        explanation: 'Hardcoded secrets in source code get committed to git. Anyone with access (including leaked repos) can use your API keys, potentially costing you money or exposing data.',
+                        fix: 'Move the secret to a .env file and load it with import.meta.env.VITE_KEY_NAME (Vite) or process.env.KEY_NAME (Node).',
+                    });
+                }
+            }
+            const publicEnvMatch = line.match(/\b((?:VITE_|NEXT_PUBLIC_)[A-Z_]+)\s*[:=]\s*['"]([^'"]{8,})['"]/);
+            if (publicEnvMatch) {
+                const varName = publicEnvMatch[1];
+                const varValue = publicEnvMatch[2];
+                if (/^https?:\/\//.test(varValue))
+                    continue;
+                if (/^[a-z]+\.(supabase\.co|supabase\.in|supabase\.com)/i.test(varValue))
+                    continue;
+                const jwtMatch = varValue.match(/^eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*$/);
+                if (jwtMatch) {
+                    const decoded = tryDecodeJwt(jwtMatch[0]);
+                    if (decoded && decoded.includes('service_role')) {
+                        findings.push({
+                            severity: 'high',
+                            check: CHECK,
+                            file: file.path,
+                            line: i + 1,
+                            title: `service_role key in public env variable: ${varName}`,
+                            explanation: 'The service_role key bypasses all database security. VITE_ and NEXT_PUBLIC_ variables are baked into your website\'s JavaScript — anyone can grab this key from your site.',
+                            fix: `Use the anon key in ${varName}. Only use service_role in secure server-side environments.`,
+                        });
+                    }
+                    continue;
+                }
+                const suspiciousPatterns = /service[_-]?role|sk-|sk_live_|AKIA|ghp_|private.?key|secret|password/i;
+                if (suspiciousPatterns.test(varName) || suspiciousPatterns.test(varValue)) {
+                    findings.push({
+                        severity: 'high',
+                        check: CHECK,
+                        file: file.path,
+                        line: i + 1,
+                        title: `Secret in public env variable: ${varName} = ${maskSecret(varValue)}`,
+                        explanation: 'VITE_ and NEXT_PUBLIC_ variables are baked into your website\'s JavaScript. Anyone can view them by right-clicking and choosing "Inspect" — they\'re not hidden.',
+                        fix: 'Never put secrets in VITE_ or NEXT_PUBLIC_ variables. Use server-side environment variables or a backend API to handle sensitive operations.',
+                    });
+                }
+            }
+        }
+    }
+    return findings;
+}
 
 ;// CONCATENATED MODULE: ./src/checks/supabase.ts
-
-
-const supabase_CHECK_ID = 'supabase';
-const supabaseCheck = {
-    id: supabase_CHECK_ID,
-    name: 'Supabase security audit',
-    async run(files, rootDir) {
-        const findings = [];
-        const sqlFiles = files.filter((f) => f.endsWith('.sql'));
-        const sourceFiles = files.filter((f) => f.endsWith('.ts') || f.endsWith('.tsx') || f.endsWith('.js') || f.endsWith('.jsx'));
-        const tableRlsStatus = new Map();
-        for (const file of sqlFiles) {
-            const content = await (0,promises_namespaceObject.readFile)((0,external_path_.join)(rootDir, file), 'utf-8');
-            const lines = content.split('\n');
-            for (let i = 0; i < lines.length; i++) {
-                const line = lines[i];
-                const createMatch = line.match(/CREATE\s+TABLE\s+(?:public\.)?(\w+)/i);
-                if (createMatch) {
-                    const tableName = createMatch[1];
-                    tableRlsStatus.set(tableName, { rlsEnabled: false, policyCount: 0, file, line: i + 1 });
-                }
-                const alterMatch = line.match(/ALTER\s+TABLE\s+(?:public\.)?(\w+)\s+.*ENABLE\s+ROW\s+LEVEL\s+SECURITY/i);
-                if (alterMatch) {
-                    const tableName = alterMatch[1];
-                    const status = tableRlsStatus.get(tableName);
-                    if (status)
-                        status.rlsEnabled = true;
-                }
-                const createPolicyMatch = line.match(/CREATE\s+POLICY\s+\w+\s+ON\s+(\w+)/i);
-                if (createPolicyMatch) {
-                    const tableName = createPolicyMatch[1];
-                    const status = tableRlsStatus.get(tableName);
-                    if (status)
-                        status.policyCount++;
-                }
-                if (/USING\s*\(\s*true\s*\)/i.test(line)) {
-                    const contextStart = Math.max(0, i - 5);
-                    const context = lines.slice(contextStart, i + 1).join('\n');
-                    const isSelect = /FOR\s+SELECT/i.test(context);
-                    if (isSelect) {
-                        findings.push({
-                            id: `${supabase_CHECK_ID}-001`,
-                            severity: 'medium',
-                            category: 'security',
-                            file,
-                            line: i + 1,
-                            message: 'Policy with USING (true) — fine if this table is meant to be public',
-                            whyItMatters: 'USING (true) on a SELECT policy means anyone can read all rows. This is acceptable for public data (e.g. a blog posts table), but risky if the table contains sensitive information.',
-                            fix: 'If this table should be private, replace with:\n  USING (auth.uid() = user_id)\nIf it\'s intentionally public, you can ignore this.',
-                        });
-                    }
-                    else {
-                        findings.push({
-                            id: `${supabase_CHECK_ID}-001`,
-                            severity: 'high',
-                            category: 'security',
-                            file,
-                            line: i + 1,
-                            message: 'Policy with USING (true) allows all reads',
-                            whyItMatters: 'USING (true) means any authenticated user can read all rows in this table. This is like having no security on your data at all.',
-                            fix: 'Replace with a proper condition:\n  USING (auth.uid() = user_id)\nThis ensures users can only read their own data.',
-                        });
-                    }
-                }
-                if (/WITH\s+CHECK\s*\(\s*true\s*\)/i.test(line)) {
+const supabase_CHECK = 'supabase';
+function supabaseCheck(files) {
+    const findings = [];
+    const sqlFiles = files.filter((f) => f.path.endsWith('.sql'));
+    const sourceFiles = files.filter((f) => f.path.endsWith('.ts') || f.path.endsWith('.tsx') || f.path.endsWith('.js') || f.path.endsWith('.jsx'));
+    const tableRlsStatus = new Map();
+    for (const file of sqlFiles) {
+        const lines = file.content.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            const createMatch = line.match(/CREATE\s+TABLE\s+(?:public\.)?(\w+)/i);
+            if (createMatch) {
+                const tableName = createMatch[1];
+                tableRlsStatus.set(tableName, { rlsEnabled: false, policyCount: 0, file: file.path, line: i + 1 });
+            }
+            const alterMatch = line.match(/ALTER\s+TABLE\s+(?:public\.)?(\w+)\s+.*ENABLE\s+ROW\s+LEVEL\s+SECURITY/i);
+            if (alterMatch) {
+                const tableName = alterMatch[1];
+                const status = tableRlsStatus.get(tableName);
+                if (status)
+                    status.rlsEnabled = true;
+            }
+            const createPolicyMatch = line.match(/CREATE\s+POLICY\s+\w+\s+ON\s+(\w+)/i);
+            if (createPolicyMatch) {
+                const tableName = createPolicyMatch[1];
+                const status = tableRlsStatus.get(tableName);
+                if (status)
+                    status.policyCount++;
+            }
+            if (/USING\s*\(\s*true\s*\)/i.test(line)) {
+                const contextStart = Math.max(0, i - 5);
+                const context = lines.slice(contextStart, i + 1).join('\n');
+                const isSelect = /FOR\s+SELECT/i.test(context);
+                if (isSelect) {
                     findings.push({
-                        id: `${supabase_CHECK_ID}-002`,
-                        severity: 'high',
-                        category: 'security',
-                        file,
+                        severity: 'medium',
+                        check: supabase_CHECK,
+                        file: file.path,
                         line: i + 1,
-                        message: 'Policy with WITH CHECK (true) allows all writes',
-                        whyItMatters: 'WITH CHECK (true) means any user can insert or update any row. Someone could modify or delete data that doesn\'t belong to them.',
-                        fix: 'Replace with a proper condition:\n  WITH CHECK (auth.uid() = user_id)\nThis ensures users can only modify their own data.',
+                        title: 'Policy with USING (true) — fine if this table is meant to be public',
+                        explanation: 'USING (true) on a SELECT policy means anyone can read all rows. This is OK for public data (like blog posts), but risky if the table has private info.',
+                        fix: 'If this table should be private, replace with:\n  USING (auth.uid() = user_id)\nIf it\'s intentionally public, you can ignore this.',
                     });
                 }
-                if (/storage\.buckets/i.test(line)) {
-                    const contextStart = Math.max(0, i - 1);
-                    const contextEnd = Math.min(lines.length, i + 3);
-                    const context = lines.slice(contextStart, contextEnd).join('\n');
-                    if (/public.*true/i.test(context) || /VALUES.*true/i.test(context)) {
-                        findings.push({
-                            id: `${supabase_CHECK_ID}-003`,
-                            severity: 'medium',
-                            category: 'security',
-                            file,
-                            line: i + 1,
-                            message: 'Public storage bucket created',
-                            whyItMatters: 'Public buckets allow anyone to read uploaded files without authentication. If users upload sensitive documents or photos, they become publicly accessible.',
-                            fix: 'Set public to false unless the bucket truly needs public access:\n  INSERT INTO storage.buckets (id, public) VALUES (\'avatars\', false);',
-                        });
-                    }
+                else {
+                    findings.push({
+                        severity: 'high',
+                        check: supabase_CHECK,
+                        file: file.path,
+                        line: i + 1,
+                        title: 'Policy with USING (true) allows all reads',
+                        explanation: 'USING (true) means any logged-in user can read every row in this table. It\'s like having no lock on your front door.',
+                        fix: 'Replace with a proper condition:\n  USING (auth.uid() = user_id)\nThis ensures users can only read their own data.',
+                    });
                 }
             }
-        }
-        for (const [tableName, status] of tableRlsStatus) {
-            if (!status.rlsEnabled) {
+            if (/WITH\s+CHECK\s*\(\s*true\s*\)/i.test(line)) {
                 findings.push({
-                    id: `${supabase_CHECK_ID}-004`,
                     severity: 'high',
-                    category: 'security',
-                    file: status.file,
-                    line: status.line,
-                    message: `Table "${tableName}" created without Row Level Security`,
-                    whyItMatters: 'Without RLS, any authenticated user can read and write all data in this table. This is the #1 security mistake in Supabase apps.',
-                    fix: `Add this after your CREATE TABLE:\n  ALTER TABLE public.${tableName} ENABLE ROW LEVEL SECURITY;`,
+                    check: supabase_CHECK,
+                    file: file.path,
+                    line: i + 1,
+                    title: 'Policy with WITH CHECK (true) allows all writes',
+                    explanation: 'WITH CHECK (true) means any user can insert or update any row. Someone could modify or delete data that doesn\'t belong to them.',
+                    fix: 'Replace with a proper condition:\n  WITH CHECK (auth.uid() = user_id)\nThis ensures users can only modify their own data.',
                 });
             }
-            else if (status.policyCount === 0) {
-                findings.push({
-                    id: `${supabase_CHECK_ID}-005`,
-                    severity: 'medium',
-                    category: 'security',
-                    file: status.file,
-                    line: status.line,
-                    message: `Table "${tableName}" has RLS enabled but no policies`,
-                    whyItMatters: 'RLS with no policies means NO ONE can access the table — not even the owner. Your app will get "permission denied" errors.',
-                    fix: `Create at least one policy:\n  CREATE POLICY "Users can read own data"\n  ON public.${tableName}\n  FOR SELECT\n  USING (auth.uid() = user_id);`,
-                });
-            }
-        }
-        for (const file of sourceFiles) {
-            const content = await (0,promises_namespaceObject.readFile)((0,external_path_.join)(rootDir, file), 'utf-8');
-            const lines = content.split('\n');
-            for (let i = 0; i < lines.length; i++) {
-                const line = lines[i];
-                if (/supabase\.from\(['"]\w+['"]\)\.(delete|update)\(\)/.test(line)) {
-                    if (!/\.eq\(/.test(line) && !/\.filter\(/.test(line)) {
-                        const method = line.match(/\.(\w+)\(\)/)?.[1] || 'operation';
-                        findings.push({
-                            id: `${supabase_CHECK_ID}-006`,
-                            severity: 'high',
-                            category: 'security',
-                            file,
-                            line: i + 1,
-                            message: `Dangerous ${method}() without filter — affects all rows`,
-                            whyItMatters: `Calling .${method}() without .eq() or .filter() will ${method === 'delete' ? 'delete' : 'modify'} every row in the table. One bug could wipe out all your data.`,
-                            fix: `Always add a filter:\n  .${method}()\n  .eq('id', targetId)\nThis ensures you only affect the specific row you intend to.`,
-                        });
-                    }
-                }
-                if (/service[_-]?role/i.test(line) && /supabase/i.test(line)) {
-                    if (!/message:|whyItMatters:|fix:|const\s+\w+\s*=|\/.*\/\.test/.test(line)) {
-                        findings.push({
-                            id: `${supabase_CHECK_ID}-007`,
-                            severity: 'high',
-                            category: 'security',
-                            file,
-                            line: i + 1,
-                            message: 'service_role key used in client code',
-                            whyItMatters: 'The service_role key bypasses all security and has full database access. If used in client code, anyone can extract it from your website and take complete control of your database.',
-                            fix: 'Use the anon key instead:\n  const supabase = createClient(url, import.meta.env.VITE_SUPABASE_ANON_KEY)\nOnly use service_role in secure server-side code.',
-                        });
-                    }
-                }
-                if (/\b(isAdmin|isAdminUser|hasAdminAccess)\s*[:=]\s*localStorage/.test(line)) {
+            if (/storage\.buckets/i.test(line)) {
+                const contextStart = Math.max(0, i - 1);
+                const contextEnd = Math.min(lines.length, i + 3);
+                const context = lines.slice(contextStart, contextEnd).join('\n');
+                if (/public.*true/i.test(context) || /VALUES.*true/i.test(context)) {
                     findings.push({
-                        id: `${supabase_CHECK_ID}-008`,
-                        severity: 'high',
-                        category: 'security',
-                        file,
+                        severity: 'medium',
+                        check: supabase_CHECK,
+                        file: file.path,
                         line: i + 1,
-                        message: 'Admin status determined in client code',
-                        whyItMatters: 'Anyone can open browser dev tools and change localStorage to set isAdmin=true. Client-side checks are not security — they\'re just UI hints. Real authorization must happen on the server.',
-                        fix: 'Check admin status server-side using Supabase RLS policies or Edge Functions. Example:\n  CREATE POLICY "Admins only"\n  ON sensitive_table\n  USING (EXISTS (SELECT 1 FROM admins WHERE user_id = auth.uid()));',
+                        title: 'Public storage bucket created',
+                        explanation: 'Public buckets let anyone read uploaded files without signing in. If users upload sensitive documents or photos, they become visible to the world.',
+                        fix: 'Set public to false unless the bucket truly needs public access:\n  INSERT INTO storage.buckets (id, public) VALUES (\'avatars\', false);',
                     });
                 }
             }
         }
-        return findings;
-    },
-};
+    }
+    for (const [tableName, status] of tableRlsStatus) {
+        if (!status.rlsEnabled) {
+            findings.push({
+                severity: 'high',
+                check: supabase_CHECK,
+                file: status.file,
+                line: status.line,
+                title: `Table "${tableName}" created without Row Level Security`,
+                explanation: 'Without RLS, any logged-in user can read and write all data in this table. This is the #1 security mistake in Supabase apps.',
+                fix: `Add this after your CREATE TABLE:\n  ALTER TABLE public.${tableName} ENABLE ROW LEVEL SECURITY;`,
+            });
+        }
+        else if (status.policyCount === 0) {
+            findings.push({
+                severity: 'medium',
+                check: supabase_CHECK,
+                file: status.file,
+                line: status.line,
+                title: `Table "${tableName}" has RLS enabled but no policies`,
+                explanation: 'RLS with no policies means NO ONE can access the table — not even the owner. Your app will get "permission denied" errors.',
+                fix: `Create at least one policy:\n  CREATE POLICY "Users can read own data"\n  ON public.${tableName}\n  FOR SELECT\n  USING (auth.uid() = user_id);`,
+            });
+        }
+    }
+    for (const file of sourceFiles) {
+        const lines = file.content.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            if (/supabase\.from\(['"]\w+['"]\)\.(delete|update)\(\)/.test(line)) {
+                if (!/\.eq\(/.test(line) && !/\.filter\(/.test(line)) {
+                    const method = line.match(/\.(\w+)\(\)/)?.[1] || 'operation';
+                    findings.push({
+                        severity: 'high',
+                        check: supabase_CHECK,
+                        file: file.path,
+                        line: i + 1,
+                        title: `Dangerous ${method}() without filter — affects all rows`,
+                        explanation: `Calling .${method}() without .eq() or .filter() will ${method === 'delete' ? 'delete' : 'modify'} every row in the table. One bug could wipe out all your data.`,
+                        fix: `Always add a filter:\n  .${method}()\n  .eq('id', targetId)\nThis ensures you only affect the specific row you intend to.`,
+                    });
+                }
+            }
+            if (/service[_-]?role/i.test(line) && /supabase/i.test(line)) {
+                if (!/title:|explanation:|fix:|const\s+\w+\s*=|\/.*\/\.test/.test(line)) {
+                    findings.push({
+                        severity: 'high',
+                        check: supabase_CHECK,
+                        file: file.path,
+                        line: i + 1,
+                        title: 'service_role key used in client code',
+                        explanation: 'The service_role key bypasses all security and has full database access. If used in client code, anyone can extract it from your website and take complete control of your database.',
+                        fix: 'Use the anon key instead:\n  const supabase = createClient(url, import.meta.env.VITE_SUPABASE_ANON_KEY)\nOnly use service_role in secure server-side code.',
+                    });
+                }
+            }
+            if (/\b(isAdmin|isAdminUser|hasAdminAccess)\s*[:=]\s*localStorage/.test(line)) {
+                findings.push({
+                    severity: 'high',
+                    check: supabase_CHECK,
+                    file: file.path,
+                    line: i + 1,
+                    title: 'Admin status determined in client code',
+                    explanation: 'Anyone can open browser dev tools and change localStorage to set isAdmin=true. Client-side checks are not security — they\'re just UI hints. Real authorization must happen on the server.',
+                    fix: 'Check admin status server-side using Supabase RLS policies or Edge Functions. Example:\n  CREATE POLICY "Admins only"\n  ON sensitive_table\n  USING (EXISTS (SELECT 1 FROM admins WHERE user_id = auth.uid()));',
+                });
+            }
+        }
+    }
+    return findings;
+}
 
 ;// CONCATENATED MODULE: ./src/checks/quality.ts
-
-
-const quality_CHECK_ID = 'quality';
+const quality_CHECK = 'quality';
 const HEAVY_PACKAGES = [
     { name: 'moment', alternative: 'date-fns or dayjs (20x smaller)' },
     { name: 'lodash', alternative: 'lodash-es (tree-shakeable) or native JS methods' },
     { name: 'rxjs', alternative: 'native Promises or lighter alternatives for simple use cases' },
 ];
-const qualityCheck = {
-    id: quality_CHECK_ID,
-    name: 'Code quality audit',
-    async run(files, rootDir) {
-        const findings = [];
-        const sourceFiles = files.filter((f) => f.endsWith('.ts') || f.endsWith('.tsx') || f.endsWith('.js') || f.endsWith('.jsx'));
-        let packageJson = {};
-        if (files.includes('package.json')) {
-            const content = await (0,promises_namespaceObject.readFile)((0,external_path_.join)(rootDir, 'package.json'), 'utf-8');
-            try {
-                packageJson = JSON.parse(content);
-            }
-            catch {
-                return findings;
-            }
+function getBasename(path) {
+    const parts = path.split('/');
+    return parts[parts.length - 1];
+}
+function qualityCheck(files) {
+    const findings = [];
+    const sourceFiles = files.filter((f) => f.path.endsWith('.ts') || f.path.endsWith('.tsx') || f.path.endsWith('.js') || f.path.endsWith('.jsx'));
+    let packageJson = {};
+    const pkgFile = files.find((f) => f.path === 'package.json');
+    if (pkgFile) {
+        try {
+            packageJson = JSON.parse(pkgFile.content);
         }
-        const deps = packageJson.dependencies || {};
-        const devDeps = packageJson.devDependencies || {};
-        const allDeps = new Set([...Object.keys(deps), ...Object.keys(devDeps)]);
-        const importedModules = new Set();
-        const fileImports = new Map();
-        for (const file of sourceFiles) {
-            const content = await (0,promises_namespaceObject.readFile)((0,external_path_.join)(rootDir, file), 'utf-8');
-            const lines = content.split('\n');
-            const imports = new Set();
-            for (const line of lines) {
-                const importMatch = line.match(/import\s+.*?from\s+['"]([^'"]+)['"]/);
-                if (importMatch) {
-                    const module = importMatch[1];
-                    imports.add(module);
-                    if (!module.startsWith('.') && !module.startsWith('@/')) {
-                        const pkgName = module.startsWith('@') ? module.split('/').slice(0, 2).join('/') : module.split('/')[0];
-                        importedModules.add(pkgName);
-                    }
-                }
-            }
-            fileImports.set(file, imports);
-            if (lines.length > 500) {
-                findings.push({
-                    id: `${quality_CHECK_ID}-001`,
-                    severity: 'low',
-                    category: 'quality',
-                    file,
-                    line: 1,
-                    message: `File has ${lines.length} lines (over 500)`,
-                    whyItMatters: 'Large files are hard to understand, test, and maintain. They often contain multiple responsibilities that should be separated.',
-                    fix: 'Break the file into smaller, focused modules. Extract components, hooks, or utility functions into separate files.',
-                });
-            }
-            for (let i = 0; i < lines.length; i++) {
-                const line = lines[i];
-                if (/console\.log\(/.test(line)) {
-                    findings.push({
-                        id: `${quality_CHECK_ID}-002`,
-                        severity: 'low',
-                        category: 'quality',
-                        file,
-                        line: i + 1,
-                        message: 'console.log left in source code',
-                        whyItMatters: 'Debug logs clutter the console in production and can expose sensitive data. They also signal unfinished code to other developers.',
-                        fix: 'Remove the console.log or use a proper logging library with log levels that can be disabled in production.',
-                    });
-                }
-                if (/\/\/\s*(TODO|FIXME)\b/i.test(line)) {
-                    const match = line.match(/\/\/\s*(TODO|FIXME)\b:?\s*(.*)/i);
-                    const keyword = match?.[1] || 'TODO';
-                    findings.push({
-                        id: `${quality_CHECK_ID}-003`,
-                        severity: 'low',
-                        category: 'quality',
-                        file,
-                        line: i + 1,
-                        message: `${keyword} comment in source code`,
-                        whyItMatters: 'TODOs and FIXMEs are easy to forget. If this was important enough to note, it should be tracked in your issue tracker where it won\'t be lost.',
-                        fix: 'Either fix the issue now or create a ticket in your issue tracker and reference it: // TODO #123',
-                    });
+        catch {
+            return findings;
+        }
+    }
+    const deps = packageJson.dependencies || {};
+    const devDeps = packageJson.devDependencies || {};
+    const importedModules = new Set();
+    const fileImports = new Map();
+    for (const file of sourceFiles) {
+        const lines = file.content.split('\n');
+        const imports = new Set();
+        for (const line of lines) {
+            const importMatch = line.match(/import\s+.*?from\s+['"]([^'"]+)['"]/);
+            if (importMatch) {
+                const module = importMatch[1];
+                imports.add(module);
+                if (!module.startsWith('.') && !module.startsWith('@/')) {
+                    const pkgName = module.startsWith('@') ? module.split('/').slice(0, 2).join('/') : module.split('/')[0];
+                    importedModules.add(pkgName);
                 }
             }
         }
-        for (const pkg of HEAVY_PACKAGES) {
-            if (deps[pkg.name]) {
-                findings.push({
-                    id: `${quality_CHECK_ID}-004`,
-                    severity: 'low',
-                    category: 'quality',
-                    file: 'package.json',
-                    line: 1,
-                    message: `Heavy package "${pkg.name}" in dependencies`,
-                    whyItMatters: `${pkg.name} adds significant bundle size, slowing down your app. Users on mobile or slow connections will notice the difference.`,
-                    fix: `Consider using ${pkg.alternative}.`,
-                });
-            }
-        }
-        for (const pkg of Object.keys(deps)) {
-            if (!importedModules.has(pkg) && !pkg.startsWith('@types/')) {
-                findings.push({
-                    id: `${quality_CHECK_ID}-005`,
-                    severity: 'medium',
-                    category: 'quality',
-                    file: 'package.json',
-                    line: 1,
-                    message: `Dependency "${pkg}" is never imported in source code`,
-                    whyItMatters: 'Unused dependencies bloat your node_modules and install time. They also confuse developers about what the project actually uses.',
-                    fix: `Remove it: npm uninstall ${pkg}`,
-                });
-            }
-        }
-        const duplicateDeps = Object.keys(deps).filter((pkg) => devDeps[pkg]);
-        for (const pkg of duplicateDeps) {
+        fileImports.set(file.path, imports);
+        if (lines.length > 500) {
             findings.push({
-                id: `${quality_CHECK_ID}-006`,
-                severity: 'medium',
-                category: 'quality',
+                severity: 'low',
+                check: quality_CHECK,
+                file: file.path,
+                line: 1,
+                title: `File has ${lines.length} lines (over 500)`,
+                explanation: 'Large files are hard to understand, test, and maintain. They often contain multiple responsibilities that should be separated.',
+                fix: 'Break the file into smaller, focused modules. Extract components, hooks, or utility functions into separate files.',
+            });
+        }
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            if (/console\.log\(/.test(line)) {
+                findings.push({
+                    severity: 'low',
+                    check: quality_CHECK,
+                    file: file.path,
+                    line: i + 1,
+                    title: 'console.log left in source code',
+                    explanation: 'Debug logs clutter the console in production and can expose sensitive data. They also signal unfinished code to other developers.',
+                    fix: 'Remove the console.log or use a proper logging library with log levels that can be disabled in production.',
+                });
+            }
+            if (/\/\/\s*(TODO|FIXME)\b/i.test(line)) {
+                const match = line.match(/\/\/\s*(TODO|FIXME)\b:?\s*(.*)/i);
+                const keyword = match?.[1] || 'TODO';
+                findings.push({
+                    severity: 'low',
+                    check: quality_CHECK,
+                    file: file.path,
+                    line: i + 1,
+                    title: `${keyword} comment in source code`,
+                    explanation: 'TODOs and FIXMEs are easy to forget. If this was important enough to note, it should be tracked in your issue tracker where it won\'t be lost.',
+                    fix: 'Either fix the issue now or create a ticket in your issue tracker and reference it: // TODO #123',
+                });
+            }
+        }
+    }
+    for (const pkg of HEAVY_PACKAGES) {
+        if (deps[pkg.name]) {
+            findings.push({
+                severity: 'low',
+                check: quality_CHECK,
                 file: 'package.json',
                 line: 1,
-                message: `"${pkg}" is in both dependencies and devDependencies`,
-                whyItMatters: 'Having a package in both lists is confusing and can cause version conflicts. It should only be in one.',
-                fix: `Decide if it's needed at runtime (dependencies) or only for development (devDependencies) and remove it from the other.`,
+                title: `Heavy package "${pkg.name}" in dependencies`,
+                explanation: `${pkg.name} adds significant bundle size, slowing down your app. Users on mobile or slow connections will notice the difference.`,
+                fix: `Consider using ${pkg.alternative}.`,
             });
         }
-        const importedFiles = new Set();
-        for (const [, imports] of fileImports) {
-            for (const imp of imports) {
-                if (imp.startsWith('.') || imp.startsWith('@/')) {
-                    importedFiles.add(imp);
-                }
-            }
-        }
-        const KNOWN_ENTRY_FILES = new Set([
-            'main.tsx', 'main.ts', 'index.tsx', 'index.ts', 'App.tsx', 'App.ts',
-            'router.tsx', 'server.ts', 'start.ts', 'middleware.ts',
-            'instrumentation.ts', 'routeTree.gen.ts',
-        ]);
-        const KNOWN_CONFIG_PATTERNS = [
-            /^vite\.config\./, /^tailwind\.config\./, /^postcss\.config\./,
-            /^next\.config\./, /^eslint\.config\./, /^tsconfig.*\.json$/,
-            /\.d\.ts$/,
-        ];
-        const ROUTING_DIRS = ['src/routes/', 'src/pages/', 'src/app/', 'supabase/functions/'];
-        const FRAMEWORK_ENTRIES = {
-            '@tanstack/react-router': ['routeTree.gen.ts', 'src/router.tsx', 'src/main.tsx'],
-            next: ['next.config.js', 'next.config.mjs', 'src/middleware.ts', 'middleware.ts', 'src/app/layout.tsx'],
-            remix: ['app/root.tsx', 'app/entry.client.tsx', 'app/entry.server.tsx'],
-            astro: ['astro.config.mjs', 'astro.config.ts', 'src/pages/index.astro'],
-        };
-        const frameworkExtra = [];
-        const allDepNames = new Set([...Object.keys(deps), ...Object.keys(devDeps)]);
-        for (const [framework, entries] of Object.entries(FRAMEWORK_ENTRIES)) {
-            if (allDepNames.has(framework) || (framework === 'next' && allDepNames.has('next'))) {
-                frameworkExtra.push(...entries);
-            }
-        }
-        const frameworkEntrySet = new Set(frameworkExtra);
-        const orphans = [];
-        for (const file of sourceFiles) {
-            const fileName = (0,external_path_.basename)(file);
-            if (KNOWN_ENTRY_FILES.has(fileName))
-                continue;
-            if (KNOWN_CONFIG_PATTERNS.some((p) => p.test(file)))
-                continue;
-            if (ROUTING_DIRS.some((dir) => file.startsWith(dir) || file.includes('/' + dir)))
-                continue;
-            if (frameworkEntrySet.has(file) || frameworkEntrySet.has(fileName))
-                continue;
-            const fileBase = file.replace(/\.\w+$/, '');
-            const isImported = Array.from(importedFiles).some((imp) => imp.includes(fileBase) || imp.includes(fileName.replace(/\.\w+$/, '')));
-            if (!isImported && sourceFiles.length > 1) {
-                orphans.push(file);
-            }
-        }
-        if (orphans.length > 0) {
-            const fileList = orphans.length <= 5
-                ? orphans.map((f) => `\`${f}\``).join(', ')
-                : `${orphans.length} files`;
+    }
+    for (const pkg of Object.keys(deps)) {
+        if (!importedModules.has(pkg) && !pkg.startsWith('@types/')) {
             findings.push({
-                id: `${quality_CHECK_ID}-007`,
-                severity: 'low',
-                category: 'quality',
-                file: orphans[0],
+                severity: 'medium',
+                check: quality_CHECK,
+                file: 'package.json',
                 line: 1,
-                message: `${orphans.length} orphan file${orphans.length === 1 ? '' : 's'} never imported: ${fileList}`,
-                whyItMatters: 'Orphan files are dead code. They add confusion about what the project actually does and may indicate unfinished or abandoned features.',
-                fix: 'If these files are truly unused, delete them. If they should be used, import them where needed.',
+                title: `Dependency "${pkg}" is never imported in source code`,
+                explanation: 'Unused dependencies bloat your node_modules and install time. They also confuse developers about what the project actually uses.',
+                fix: `Remove it: npm uninstall ${pkg}`,
             });
         }
-        return findings;
-    },
-};
+    }
+    const duplicateDeps = Object.keys(deps).filter((pkg) => devDeps[pkg]);
+    for (const pkg of duplicateDeps) {
+        findings.push({
+            severity: 'medium',
+            check: quality_CHECK,
+            file: 'package.json',
+            line: 1,
+            title: `"${pkg}" is in both dependencies and devDependencies`,
+            explanation: 'Having a package in both lists is confusing and can cause version conflicts. It should only be in one.',
+            fix: `Decide if it's needed at runtime (dependencies) or only for development (devDependencies) and remove it from the other.`,
+        });
+    }
+    const importedFiles = new Set();
+    for (const [, imports] of fileImports) {
+        for (const imp of imports) {
+            if (imp.startsWith('.') || imp.startsWith('@/')) {
+                importedFiles.add(imp);
+            }
+        }
+    }
+    const KNOWN_ENTRY_FILES = new Set([
+        'main.tsx', 'main.ts', 'index.tsx', 'index.ts', 'App.tsx', 'App.ts',
+        'router.tsx', 'server.ts', 'start.ts', 'middleware.ts',
+        'instrumentation.ts', 'routeTree.gen.ts',
+    ]);
+    const KNOWN_CONFIG_PATTERNS = [
+        /^vite\.config\./, /^tailwind\.config\./, /^postcss\.config\./,
+        /^next\.config\./, /^eslint\.config\./, /^tsconfig.*\.json$/,
+        /\.d\.ts$/,
+    ];
+    const ROUTING_DIRS = ['src/routes/', 'src/pages/', 'src/app/', 'supabase/functions/'];
+    const FRAMEWORK_ENTRIES = {
+        '@tanstack/react-router': ['routeTree.gen.ts', 'src/router.tsx', 'src/main.tsx'],
+        next: ['next.config.js', 'next.config.mjs', 'src/middleware.ts', 'middleware.ts', 'src/app/layout.tsx'],
+        remix: ['app/root.tsx', 'app/entry.client.tsx', 'app/entry.server.tsx'],
+        astro: ['astro.config.mjs', 'astro.config.ts', 'src/pages/index.astro'],
+    };
+    const frameworkExtra = [];
+    const allDepNames = new Set([...Object.keys(deps), ...Object.keys(devDeps)]);
+    for (const [framework, entries] of Object.entries(FRAMEWORK_ENTRIES)) {
+        if (allDepNames.has(framework) || (framework === 'next' && allDepNames.has('next'))) {
+            frameworkExtra.push(...entries);
+        }
+    }
+    const frameworkEntrySet = new Set(frameworkExtra);
+    const orphans = [];
+    for (const file of sourceFiles) {
+        const filePath = file.path;
+        const fileName = getBasename(filePath);
+        if (KNOWN_ENTRY_FILES.has(fileName))
+            continue;
+        if (KNOWN_CONFIG_PATTERNS.some((p) => p.test(filePath)))
+            continue;
+        if (ROUTING_DIRS.some((dir) => filePath.startsWith(dir) || filePath.includes('/' + dir)))
+            continue;
+        if (frameworkEntrySet.has(filePath) || frameworkEntrySet.has(fileName))
+            continue;
+        const fileBase = filePath.replace(/\.\w+$/, '');
+        const isImported = Array.from(importedFiles).some((imp) => imp.includes(fileBase) || imp.includes(fileName.replace(/\.\w+$/, '')));
+        if (!isImported && sourceFiles.length > 1) {
+            orphans.push(filePath);
+        }
+    }
+    if (orphans.length > 0) {
+        const fileList = orphans.length <= 5
+            ? orphans.map((f) => `\`${f}\``).join(', ')
+            : `${orphans.length} files`;
+        findings.push({
+            severity: 'low',
+            check: quality_CHECK,
+            file: orphans[0],
+            line: 1,
+            title: `${orphans.length} orphan file${orphans.length === 1 ? '' : 's'} never imported: ${fileList}`,
+            explanation: 'Orphan files are dead code. They add confusion about what the project actually does and may indicate unfinished or abandoned features.',
+            fix: 'If these files are truly unused, delete them. If they should be used, import them where needed.',
+        });
+    }
+    return findings;
+}
+
+;// CONCATENATED MODULE: ./src/scan.ts
+
+
+
+function scan(files) {
+    const findings = [...secretsCheck(files), ...supabaseCheck(files), ...qualityCheck(files)];
+    const high = findings.filter((f) => f.severity === 'high').length;
+    const medium = findings.filter((f) => f.severity === 'medium').length;
+    const low = findings.filter((f) => f.severity === 'low').length;
+    const score = Math.max(0, 100 - high * 15 - medium * 5 - low * 1);
+    return { score, findings };
+}
 
 ;// CONCATENATED MODULE: ./node_modules/balanced-match/dist/esm/index.js
 const balanced = (a, b, str) => {
@@ -34892,9 +34904,6 @@ minimatch.unescape = unescape_unescape;
 
 
 
-
-
-const CHECKS = [secretsCheck, supabaseCheck, qualityCheck];
 const COMMENT_MARKER = '<!-- guardrail-audit-bot -->';
 async function run() {
     try {
@@ -34907,28 +34916,25 @@ async function run() {
         core.info(`Ignore patterns: ${ignorePatterns.join(', ')}`);
         let files = await scanFiles(targetPath);
         if (ignorePatterns.length > 0) {
-            files = files.filter((file) => !ignorePatterns.some((pattern) => minimatch(file, pattern)));
+            files = files.filter((file) => !ignorePatterns.some((pattern) => minimatch(file.path, pattern)));
         }
         if (files.length === 0) {
             core.info('No files found to audit.');
             core.setOutput('total-findings', 0);
             core.setOutput('high-count', 0);
+            core.setOutput('score', 100);
             return;
         }
         core.info(`Found ${files.length} files to audit.`);
-        const allFindings = [];
-        for (const check of CHECKS) {
-            core.info(`Running check: ${check.name}`);
-            const results = await check.run(files, targetPath);
-            allFindings.push(...results);
-        }
-        const highCount = allFindings.filter((f) => f.severity === 'high').length;
-        const mediumCount = allFindings.filter((f) => f.severity === 'medium').length;
-        const lowCount = allFindings.filter((f) => f.severity === 'low').length;
-        core.info(`Found ${allFindings.length} findings: ${highCount} high, ${mediumCount} medium, ${lowCount} low`);
-        core.setOutput('total-findings', allFindings.length);
+        const { score, findings } = scan(files);
+        const highCount = findings.filter((f) => f.severity === 'high').length;
+        const mediumCount = findings.filter((f) => f.severity === 'medium').length;
+        const lowCount = findings.filter((f) => f.severity === 'low').length;
+        core.info(`Found ${findings.length} findings: ${highCount} high, ${mediumCount} medium, ${lowCount} low — score ${score}/100`);
+        core.setOutput('total-findings', findings.length);
         core.setOutput('high-count', highCount);
-        const report = markdownReport(allFindings, files.length);
+        core.setOutput('score', score);
+        const report = markdownReport(findings, files.length, score);
         await core.summary.addRaw(report).write();
         if (shouldComment && token && github.context.eventName === 'pull_request') {
             const octokit = github.getOctokit(token);

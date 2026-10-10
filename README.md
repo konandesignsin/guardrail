@@ -1,6 +1,6 @@
 # Guardrail
 
-Security and quality auditor for AI-built apps (Lovable, Bolt, Cursor) as a GitHub Action.
+Security and quality auditor for AI-built apps (Lovable, Bolt, Cursor) as a GitHub Action and an npm library.
 
 ![GitHub Actions status](https://img.shields.io/github/actions/workflow/status/konandesignsin/guardrail/guardrail.yml)
 ![License](https://img.shields.io/github/license/konandesignsin/guardrail)
@@ -33,6 +33,47 @@ jobs:
 ```
 
 Guardrail will audit your code on every PR and post a comment with findings.
+
+## Use as a library
+
+The scanner is also published to npm as `guardrail-scanner`, so you can run the same checks from your own tooling.
+
+```bash
+npm install guardrail-scanner
+```
+
+```ts
+import { scan } from "guardrail-scanner";
+
+const result = scan([
+  { path: ".env.example", content: "VITE_API_URL=your_url_here\n" },
+  { path: "src/App.tsx", content: 'const key = "sk-...";\n' },
+]);
+
+console.log(result.score); // 0-100
+console.log(result.findings); // Finding[]
+```
+
+`scan()` is pure — it takes file contents in memory and returns a typed JSON result. No filesystem, network, or console access, so it runs anywhere Node 20+ runs, including a Next.js server route.
+
+### Output format
+
+```ts
+interface ScanResult {
+  score: number; // 100 - 15*high - 5*medium - 1*low, floored at 0
+  findings: Finding[];
+}
+
+interface Finding {
+  severity: "high" | "medium" | "low";
+  check: "secrets" | "supabase" | "quality";
+  title: string; // short summary of the issue
+  explanation: string; // why it matters
+  fix: string; // how to fix it
+  file: string; // path relative to the scanned project
+  line: number; // 1-based line number
+}
+```
 
 ## Inputs and outputs
 

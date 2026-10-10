@@ -2,13 +2,8 @@ import * as core from '@actions/core';
 import * as github from '@actions/github';
 import { scanFiles } from './core/scanner.js';
 import { markdownReport } from './core/reporter.js';
-import type { Check, Finding } from './core/types.js';
-import { secretsCheck } from './checks/secrets.js';
-import { supabaseCheck } from './checks/supabase.js';
-import { qualityCheck } from './checks/quality.js';
+import { scan } from './scan.js';
 import { minimatch } from 'minimatch';
-
-const CHECKS: Check[] = [secretsCheck, supabaseCheck, qualityCheck];
 
 const COMMENT_MARKER = '<!-- guardrail-audit-bot -->';
 
@@ -26,35 +21,32 @@ async function run(): Promise<void> {
     let files = await scanFiles(targetPath);
 
     if (ignorePatterns.length > 0) {
-      files = files.filter((file) => !ignorePatterns.some((pattern) => minimatch(file, pattern)));
+      files = files.filter((file) => !ignorePatterns.some((pattern) => minimatch(file.path, pattern)));
     }
 
     if (files.length === 0) {
       core.info('No files found to audit.');
       core.setOutput('total-findings', 0);
       core.setOutput('high-count', 0);
+      core.setOutput('score', 100);
       return;
     }
 
     core.info(`Found ${files.length} files to audit.`);
 
-    const allFindings: Finding[] = [];
-    for (const check of CHECKS) {
-      core.info(`Running check: ${check.name}`);
-      const results = await check.run(files, targetPath);
-      allFindings.push(...results);
-    }
+    const { score, findings } = scan(files);
 
-    const highCount = allFindings.filter((f) => f.severity === 'high').length;
-    const mediumCount = allFindings.filter((f) => f.severity === 'medium').length;
-    const lowCount = allFindings.filter((f) => f.severity === 'low').length;
+    const highCount = findings.filter((f) => f.severity === 'high').length;
+    const mediumCount = findings.filter((f) => f.severity === 'medium').length;
+    const lowCount = findings.filter((f) => f.severity === 'low').length;
 
-    core.info(`Found ${allFindings.length} findings: ${highCount} high, ${mediumCount} medium, ${lowCount} low`);
+    core.info(`Found ${findings.length} findings: ${highCount} high, ${mediumCount} medium, ${lowCount} low — score ${score}/100`);
 
-    core.setOutput('total-findings', allFindings.length);
+    core.setOutput('total-findings', findings.length);
     core.setOutput('high-count', highCount);
+    core.setOutput('score', score);
 
-    const report = markdownReport(allFindings, files.length);
+    const report = markdownReport(findings, files.length, score);
 
     await core.summary.addRaw(report).write();
 

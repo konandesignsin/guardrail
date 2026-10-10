@@ -1,11 +1,46 @@
 {
-  "name": "guardrail",
+  "name": "guardrail-scanner",
   "version": "0.1.0",
-  "description": "Audit React/Vite apps exported from Lovable or Bolt",
+  "description": "Scan AI-built apps (Lovable, Bolt exports) for exposed secrets, insecure Supabase setups, and code quality issues",
+  "license": "MIT",
   "type": "module",
+  "main": "./lib/index.cjs",
+  "module": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "import": "./lib/index.js",
+      "require": "./lib/index.cjs"
+    }
+  },
+  "files": [
+    "lib",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "security",
+    "audit",
+    "scanner",
+    "static-analysis",
+    "lovable",
+    "bolt",
+    "supabase",
+    "secrets",
+    "code-quality",
+    "ai-generated-code"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/konandesignsin/guardrail.git"
+  },
   "scripts": {
     "audit": "tsx src/cli.ts",
-    "build": "ncc build src/action.ts -o dist --source-map --license licenses.txt"
+    "build:lib": "tsup src/index.ts --format esm,cjs --dts --target node20 --out-dir lib --clean",
+    "build": "npm run build:lib && ncc build src/action.ts -o dist --source-map --license licenses.txt",
+    "test": "node --import tsx --test \"src/tests/*.test.ts\"",
+    "prepublishOnly": "npm run build && npm test"
   },
   "dependencies": {
     "@actions/core": "^1.11.1",
@@ -15,6 +50,7 @@
   "devDependencies": {
     "@types/node": "^26.6.5",
     "@vercel/ncc": "^0.38.0",
+    "tsup": "^8.5.1",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
   }
